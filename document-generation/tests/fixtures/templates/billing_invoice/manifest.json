@@ -1,0 +1,19 @@
+{
+  "id": "billing.invoice",
+  "version": "1",
+  "engine": "jinja-html",
+  "supported_formats": ["pdf", "html"],
+  "entrypoint": "invoice.html",
+  "output_basename": "invoice",
+  "required_fields": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "type": "object",
+    "required": ["invoice_number", "customer_name", "total", "currency"],
+    "properties": {
+      "invoice_number": { "type": "string" },
+      "customer_name": { "type": "string" },
+      "total": { "type": "number" },
+      "currency": { "type": "string" }
+    }
+  }
+}

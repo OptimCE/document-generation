@@ -1,0 +1,13 @@
+-r base.txt
+
+# Render engines. Only the worker process imports these.
+#
+# Jinja2 → HTML, then WeasyPrint → PDF. WeasyPrint needs native libraries at
+# runtime (pango, cairo, gdk-pixbuf, harfbuzz); these are installed in
+# Dockerfile.worker. On a bare host without them, `import weasyprint` raises —
+# the PDF renderer imports it lazily and the PDF test skips when it is absent.
+jinja2==3.1.4
+weasyprint==63.1
+
+# XLSX templating.
+openpyxl==3.1.5
