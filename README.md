@@ -1,10 +1,21 @@
+<p align="center">
+  <img src="docs/logo.svg" alt="OptimCE document-generation logo" width="160">
+</p>
+
 # document-generation
+
+[![Website](https://img.shields.io/badge/Website-optimce.be-2e7d32.svg)](https://www.optimce.be/en/)
+[![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
+[![en](https://img.shields.io/badge/lang-en-43a047.svg)](README.md)
+[![fr](https://img.shields.io/badge/lang-fr-lightgrey.svg)](docs/README.fr.md)
+[![de](https://img.shields.io/badge/lang-de-lightgrey.svg)](docs/README.de.md)
+[![nl](https://img.shields.io/badge/lang-nl-lightgrey.svg)](docs/README.nl.md)
 
 A generic, **stateless**, **NATS-only** document-generation worker for OptimCE.
 
 It consumes a generation request over JetStream, fetches a template + manifest
 from object storage, validates the supplied `data` against the manifest's JSON
-Schema, renders to **PDF and/or XLSX**, writes the artifacts to a single output
+Schema, renders to **PDF, HTML and/or XLSX**, writes the artifacts to a single output
 bucket, and publishes a result.
 
 The worker contains **no domain knowledge** — nothing about invoices, members or
@@ -204,4 +215,20 @@ To run it in the dev stack:
    ```bash
    python -m scripts.smoke
    ```
-```
+
+## Contributing
+
+Contributions are welcome. See [CONTRIBUTING.md](CONTRIBUTING.md) for how to set
+up a development environment, run the quality gates, and open a pull request. By
+participating, you agree to abide by our
+[Code of Conduct](CODE_OF_CONDUCT.md).
+
+## Security
+
+Please report security vulnerabilities responsibly — see our
+[security policy](SECURITY.md). Please **do not** open public issues for
+vulnerabilities.
+
+## License
+
+Licensed under the [Apache License 2.0](LICENSE).
