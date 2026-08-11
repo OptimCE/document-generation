@@ -11,3 +11,15 @@ weasyprint==63.1
 
 # XLSX templating.
 openpyxl==3.1.5
+
+# DOCX templating — Jinja inside a real .docx. Pure Python apart from lxml,
+# whose wheels bundle libxml2/libxslt statically, so unlike WeasyPrint there is
+# nothing to install at the OS level and these renderers work on a bare host.
+# lxml is pinned explicitly rather than floated: it is the only compiled
+# dependency in the tree and a source-build fallback is a nasty CI failure.
+docxtpl==0.20.2
+python-docx==1.2.0
+lxml==6.1.1
+
+# AcroForm filling for official regulator PDFs (engine "pdf-form"). Pure Python.
+pypdf==5.1.0

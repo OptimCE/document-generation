@@ -14,7 +14,7 @@ from __future__ import annotations
 from enum import StrEnum
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 # ---------------------------------------------------------------------------
 # Content types per output format. Kept here (domain) because the format set is
@@ -23,6 +23,7 @@ from pydantic import BaseModel, ConfigDict, Field
 _CONTENT_TYPES: dict[str, str] = {
     "pdf": "application/pdf",
     "xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    "docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
     "html": "text/html; charset=utf-8",
 }
 
@@ -30,6 +31,7 @@ _CONTENT_TYPES: dict[str, str] = {
 class OutputFormat(StrEnum):
     PDF = "pdf"
     XLSX = "xlsx"
+    DOCX = "docx"
     HTML = "html"
 
     @property
@@ -50,6 +52,11 @@ class Engine(StrEnum):
 
     JINJA_HTML = "jinja-html"
     XLSX = "xlsx"
+    DOCX = "docx"
+    # Fills an existing fillable (AcroForm) PDF rather than authoring one. Used
+    # for official regulator forms, where the filed document must BE the
+    # authority's own file with only its field values set.
+    PDF_FORM = "pdf-form"
 
 
 class GenerationStatus(StrEnum):
@@ -61,7 +68,21 @@ class GenerationStatus(StrEnum):
 _DEFAULT_ENTRYPOINT: dict[Engine, str] = {
     Engine.JINJA_HTML: "template.html",
     Engine.XLSX: "template.xlsx",
+    Engine.DOCX: "template.docx",
+    Engine.PDF_FORM: "template.pdf",
 }
+
+# A missing entry would raise a bare KeyError from resolve_entrypoint() — and a
+# KeyError is not a DocGenError, so the orchestrator would not catch it and the
+# dispatcher would misclassify a template-config bug as a transient failure,
+# burning every retry before the DLQ. Fail at import instead, in every
+# environment including tests. Not an `assert`: `python -O` strips those, and
+# this guard is most needed in exactly the optimised container image.
+if set(_DEFAULT_ENTRYPOINT) != set(Engine):
+    raise RuntimeError(
+        "every Engine needs a default entrypoint; missing "
+        f"{sorted(set(Engine) - set(_DEFAULT_ENTRYPOINT))}"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -153,6 +174,41 @@ class GenerationResult(BaseModel):
 # ---------------------------------------------------------------------------
 # Manifest (ships with every template)
 # ---------------------------------------------------------------------------
+class BlockSpec(BaseModel):
+    """A repeating region of a spreadsheet template, declared by the template.
+
+    Layout (which sheet, which cell, which column order, how many rows fit) is a
+    fact about the workbook, so it lives here — in the bundle — and never in the
+    caller's ``data``. A caller supplies only the list: ``data[source]`` is a
+    list of dicts, and row *i* column *j* is ``rows[i][columns[j]]``.
+    """
+
+    model_config = ConfigDict(extra="ignore")
+
+    source: str = Field(min_length=1)
+    columns: list[str] = Field(min_length=1)
+    # Exactly one of the two. ``anchor`` is the primary form because real
+    # regulator workbooks rarely carry usable defined names (and where they do,
+    # they are data-validation list sources, not layout markers).
+    anchor: str | None = None  # "Sheet name!A4" or "A4" (active sheet)
+    anchor_name: str | None = None  # a workbook defined name
+    # Capacity of the pre-provisioned band. ``None`` derives it from the
+    # ``maxItems`` of this source in ``required_fields`` (single source of truth).
+    max_rows: int | None = Field(default=None, ge=1)
+    # Blank out-of-use rows in a bordered/banded template look like empty table
+    # rows; hiding them is deterministic and preserves every style and range,
+    # unlike delete_rows().
+    hide_unused_rows: bool = True
+
+    @model_validator(mode="after")
+    def _exactly_one_anchor(self) -> BlockSpec:
+        if bool(self.anchor) == bool(self.anchor_name):
+            raise ValueError(
+                f"block {self.source!r} must declare exactly one of " f"'anchor' or 'anchor_name'"
+            )
+        return self
+
+
 class Manifest(BaseModel):
     # ``extra="ignore"`` so a manifest authored against a future, richer schema
     # still loads here.
@@ -167,6 +223,39 @@ class Manifest(BaseModel):
     # Optional extensions (see plan): default-derived when omitted.
     entrypoint: str | None = None
     output_basename: str | None = None
+
+    # engine="xlsx": repeating regions this workbook provisions.
+    blocks: list[BlockSpec] = Field(default_factory=list)
+    # engine="pdf-form": semantic data key → AcroForm field name. Official forms
+    # name their fields "Champ de texte 68", so the bundle owns the translation.
+    # A list of names is a comb: the value is spelled one character per box.
+    fields: dict[str, str | list[str]] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def _blocks_have_resolvable_capacity(self) -> Manifest:
+        """Resolve every block's capacity now, so a render can never fail on it.
+
+        ``template_store._load_manifest`` turns a ValueError here into a
+        permanent ``TemplateNotFoundError`` at fetch time — which is what a
+        template-authoring mistake deserves.
+        """
+        for block in self.blocks:
+            self.block_capacity(block)
+        return self
+
+    def block_capacity(self, block: BlockSpec) -> int:
+        """Rows the template reserves for ``block`` — explicit, or from the schema."""
+        if block.max_rows is not None:
+            return block.max_rows
+        properties = self.required_fields.get("properties")
+        schema = properties.get(block.source) if isinstance(properties, dict) else None
+        max_items = schema.get("maxItems") if isinstance(schema, dict) else None
+        if isinstance(max_items, int) and max_items >= 1:
+            return max_items
+        raise ValueError(
+            f"block {block.source!r} has no capacity: set 'max_rows' on the block, or "
+            f"'maxItems' on required_fields.properties.{block.source}"
+        )
 
     def resolve_entrypoint(self) -> str:
         return self.entrypoint or _DEFAULT_ENTRYPOINT[self.engine]

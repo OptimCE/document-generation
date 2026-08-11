@@ -47,7 +47,8 @@ adapters/      # concrete implementations of the ports
   validator_jsonschema.py  Draft 2020-12 validation gate
   nats_transport.py        publish results / DLQ
   render_executor.py       inline + process-pool execution
-  renderers/               jinja-html→PDF (WeasyPrint), xlsx (openpyxl), registry
+  renderers/               jinja-html→PDF (WeasyPrint), xlsx (openpyxl),
+                           docx (docxtpl), pdf-form (pypdf), registry, _ooxml
 core/          # reused infra (settings, logging, tracing, metrics, queue, storage client)
 worker/        # main.py entrypoint + dispatcher (subscription, ack/nak/DLQ)
 ```
@@ -106,20 +107,59 @@ Error codes: `VALIDATION_ERROR`, `TEMPLATE_NOT_FOUND`, `UNSUPPORTED_FORMAT`
 }
 ```
 
-- `engine` — `jinja-html` (PDF/HTML via Jinja2 + WeasyPrint) or `xlsx` (openpyxl).
-- `entrypoint` *(optional)* — entry file; defaults `template.html` / `template.xlsx`.
+- `engine` — one of:
+
+  | engine | produces | library | use for |
+  |---|---|---|---|
+  | `jinja-html` | `pdf`, `html` | Jinja2 + WeasyPrint | documents we author |
+  | `xlsx` | `xlsx` | openpyxl | spreadsheet forms |
+  | `docx` | `docx` | docxtpl | documents whose mandated format is Word |
+  | `pdf-form` | `pdf` | pypdf | filling an authority's own fillable PDF |
+
+- `entrypoint` *(optional)* — entry file; defaults `template.html` /
+  `template.xlsx` / `template.docx` / `template.pdf`.
 - `output_basename` *(optional)* — artifact base name; defaults to the last
   dot-segment of `id` (`billing.invoice` → `invoice.pdf`).
 - `required_fields` — JSON Schema; an empty schema validates everything.
+- `blocks` *(xlsx only)* — repeating regions, see below.
+- `fields` *(pdf-form only)* — data key → AcroForm field name.
 
 **jinja-html templates** receive the request `data` as `data` and the locale as
 `locale` (e.g. `{{ data.invoice_number }}`). Relative assets (`./invoice.css`,
 `./logo.png`, fonts) resolve against the template directory. Missing fields are a
 hard error (no silent blanks). See `tests/fixtures/templates/billing_invoice/`.
 
-**xlsx templates** are filled from `data` two ways: workbook **defined names**
-matching top-level `data` keys, and an explicit `data.cells` map of
-`"A1"` / `"Sheet!A1"` → value (applied last).
+**docx templates** work the same way — `{{ data.x }}` written inside Word.
+
+**xlsx templates** are filled from `data` three ways: workbook **defined names**
+matching top-level `data` keys, **repeating blocks**, and an explicit
+`data.cells` map of `"A1"` / `"Sheet!A1"` → value (applied last).
+
+A block turns a variable-length list into worksheet rows. Layout is declared by
+the *manifest*, never by the caller — the anchor cell is a fact about the
+workbook:
+
+```json
+"blocks": [{
+  "source": "participants",
+  "anchor": "Membres et actionnaires!A4",
+  "columns": ["categorie", "nom", "rue", "code_postal"],
+  "hide_unused_rows": true
+}]
+```
+
+`data.participants` is then a list of dicts and row *i* column *j* is
+`rows[i][columns[j]]`. Rows are written **in place** into a band the template
+already provisions — never inserted, because openpyxl does not fix up formulas,
+merged ranges, defined names, data validations or print areas when rows shift.
+Capacity comes from `required_fields.properties.<source>.maxItems` (or an
+explicit `max_rows`), and overflowing it is a **permanent** `VALIDATION_ERROR`
+raised before any render. Unused rows are hidden, not deleted.
+
+**pdf-form templates** are the authority's own fillable PDF; only field values
+change. Official forms auto-name their fields, so the manifest maps them:
+`"fields": {"community_name": "Champ de texte 68"}`. Checkbox export states are
+read from the PDF itself, so `/Oui`, `/Yes` and `/1` all work without config.
 
 ## Reliability (JetStream)
 
