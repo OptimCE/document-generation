@@ -38,7 +38,8 @@ adapters/               # concrete port impls — the only place frameworks live
   validator_jsonschema.py #  Draft 2020-12 gate
   nats_transport.py     #   publish results / DLQ
   render_executor.py    #   Inline (tests) + ProcessPool (prod)
-  renderers/            #   jinja_html_pdf (WeasyPrint), xlsx (openpyxl), registry, _paths (traversal guard)
+  renderers/            #   jinja_html_pdf (WeasyPrint), xlsx (openpyxl), docx (docxtpl),
+                        #   pdf_form (pypdf), registry, _paths (traversal guard), _ooxml (zip repack)
 core/                   # infra cloned/trimmed from simulation-key
   config.py  queue/{init.py}  storage/client.py  logging.py  tracing.py  metrics.py
 worker/
@@ -67,10 +68,26 @@ of truth for both `error.permanent` and the ack/nak decision.
   so `./logo.png`/`./invoice.css`/fonts resolve. Templates receive `data` +
   `locale`; `StrictUndefined` makes a missing field a hard error (no silent blanks).
 - `xlsx` → openpyxl: workbook **defined names** matching top-level `data` keys,
-  plus `data["cells"]` (`"A1"` / `"Sheet!A1"` → value, applied last).
-- Manifest has two **optional** fields beyond the spec: `entrypoint` (default
-  `template.html` / `template.xlsx`) and `output_basename` (default = last
-  dot-segment of `id`, e.g. `billing.invoice` → `invoice.pdf`).
+  manifest-declared repeating **blocks**, then `data["cells"]` (`"A1"` /
+  `"Sheet!A1"` → value, applied last).
+- `docx` → docxtpl (Jinja inside a real `.docx`). Pure Python — unlike
+  WeasyPrint it imports and tests fine on a bare host. `autoescape=True` is
+  mandatory: a `.docx` body is XML, so an unescaped `&` corrupts the package.
+- `pdf-form` → pypdf: fills the authority's own AcroForm. `manifest.fields` maps
+  a data key to the (auto-generated) field name; checkbox export states are read
+  from the PDF, not configured.
+- Manifest optional fields beyond the spec: `entrypoint` (default
+  `template.html` / `.xlsx` / `.docx` / `.pdf`), `output_basename` (default =
+  last dot-segment of `id`), `blocks` (xlsx), `fields` (pdf-form).
+- **Blocks write in place, never `insert_rows`** — openpyxl does not fix up
+  formulas, merged ranges, defined names, data validations or print areas on a
+  shift, and regulator forms are full of all of them. Capacity is
+  `required_fields.properties.<source>.maxItems`; overflow is a **permanent**
+  `VALIDATION_ERROR` (a retry of the same list can never fit). Unused rows are
+  hidden, not deleted.
+- **Adding an engine is guarded at both ends**: `domain/models.py` raises at
+  import if `_DEFAULT_ENTRYPOINT` misses an `Engine`, and
+  `tests/renderers/test_registry.py` asserts every `Engine` has a renderer.
 
 ## Reliability (JetStream)
 

@@ -24,6 +24,7 @@ from openpyxl.workbook.defined_name import DefinedName
 
 from domain.errors import DocGenError
 from domain.models import (
+    BlockSpec,
     Engine,
     GenerationRequest,
     Manifest,
@@ -101,6 +102,192 @@ def xlsx_bundle(tmp_path: Path) -> TemplateBundle:
     )
     (directory / "manifest.json").write_text(manifest.model_dump_json())
     return TemplateBundle(manifest=manifest, root=directory)
+
+
+@pytest.fixture
+def xlsx_block_bundle(tmp_path: Path) -> TemplateBundle:
+    """A workbook with a header row and a 4-row participant band at A4.
+
+    Mirrors the real CWaPE annexes: a titled sheet, a header row, then a
+    pre-provisioned band the renderer writes into without shifting anything.
+    """
+    directory = tmp_path / "xlsx_block_template"
+    directory.mkdir()
+
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet.title = "Participants"
+    sheet["A1"] = "PARTICIPANTS"
+    sheet["A3"], sheet["B3"], sheet["C3"] = "Nom", "EAN", "Localite"
+    workbook.save(directory / "template.xlsx")
+
+    manifest = Manifest(
+        id="admin.participants",
+        version="1",
+        engine=Engine.XLSX,
+        supported_formats=[OutputFormat.XLSX],
+        required_fields={
+            "type": "object",
+            "properties": {
+                "participants": {"type": "array", "maxItems": 4},
+            },
+        },
+        entrypoint="template.xlsx",
+        output_basename="participants",
+        blocks=[
+            BlockSpec(
+                source="participants",
+                anchor="Participants!A4",
+                columns=["nom", "ean", "localite"],
+            )
+        ],
+    )
+    (directory / "manifest.json").write_text(manifest.model_dump_json())
+    return TemplateBundle(manifest=manifest, root=directory)
+
+
+@pytest.fixture
+def docx_bundle(tmp_path: Path) -> TemplateBundle:
+    """A .docx carrying docxtpl Jinja placeholders, built at test time."""
+    from docx import Document
+
+    directory = tmp_path / "docx_template"
+    directory.mkdir()
+
+    document = Document()
+    document.add_heading("Convention", level=1)
+    document.add_paragraph("Communauté : {{ data.community_name }}")
+    document.add_paragraph("Représentant : {{ data.representative }}")
+    document.save(str(directory / "template.docx"))
+
+    manifest = Manifest(
+        id="admin.agreement",
+        version="1",
+        engine=Engine.DOCX,
+        supported_formats=[OutputFormat.DOCX],
+        required_fields={},
+        entrypoint="template.docx",
+        output_basename="agreement",
+    )
+    (directory / "manifest.json").write_text(manifest.model_dump_json())
+    return TemplateBundle(manifest=manifest, root=directory)
+
+
+@pytest.fixture
+def pdf_form_bundle(tmp_path: Path) -> TemplateBundle:
+    """A two-field AcroForm PDF (one text field, one checkbox) built at test time.
+
+    Built rather than committed so the fixture carries no third-party document
+    and the field names are meaningful in assertions.
+    """
+    directory = tmp_path / "pdf_form_template"
+    directory.mkdir()
+    _write_acroform_pdf(directory / "template.pdf")
+
+    manifest = Manifest(
+        id="admin.declaration",
+        version="1",
+        engine=Engine.PDF_FORM,
+        supported_formats=[OutputFormat.PDF],
+        required_fields={},
+        entrypoint="template.pdf",
+        output_basename="declaration",
+        fields={"community_name": "Champ de texte 1", "agreed": "Case a cocher 1"},
+    )
+    (directory / "manifest.json").write_text(manifest.model_dump_json())
+    return TemplateBundle(manifest=manifest, root=directory)
+
+
+def _write_acroform_pdf(path: Path) -> None:
+    """Write a minimal one-page PDF with a text field and a checkbox.
+
+    A well-formed AcroForm carries a ``/DR`` (default resources, with a font) and
+    a ``/DA`` (default appearance) — pypdf needs both to regenerate a field's
+    appearance stream. Real regulator forms have them; a fixture without them
+    fails in a way that looks like a renderer bug, so they are set here.
+    """
+    from pypdf import PdfWriter
+    from pypdf.generic import (
+        ArrayObject,
+        BooleanObject,
+        DictionaryObject,
+        NameObject,
+        NumberObject,
+        TextStringObject,
+    )
+
+    writer = PdfWriter()
+    page = writer.add_blank_page(width=595, height=842)
+
+    helvetica = writer._add_object(
+        DictionaryObject(
+            {
+                NameObject("/Type"): NameObject("/Font"),
+                NameObject("/Subtype"): NameObject("/Type1"),
+                NameObject("/BaseFont"): NameObject("/Helvetica"),
+                NameObject("/Encoding"): NameObject("/WinAnsiEncoding"),
+            }
+        )
+    )
+    default_resources = DictionaryObject(
+        {NameObject("/Font"): DictionaryObject({NameObject("/Helv"): helvetica})}
+    )
+    default_appearance = TextStringObject("/Helv 0 Tf 0 g")
+
+    def _field(name: str, rect: list[int], extra: dict[str, Any]) -> Any:
+        field = DictionaryObject(
+            {
+                NameObject("/Type"): NameObject("/Annot"),
+                NameObject("/Subtype"): NameObject("/Widget"),
+                NameObject("/T"): TextStringObject(name),
+                NameObject("/Rect"): ArrayObject([NumberObject(n) for n in rect]),
+                NameObject("/F"): NumberObject(4),
+            }
+        )
+        field.update({NameObject(k): v for k, v in extra.items()})
+        return writer._add_object(field)
+
+    text_ref = _field(
+        "Champ de texte 1",
+        [50, 700, 300, 720],
+        {
+            "/FT": NameObject("/Tx"),
+            "/V": TextStringObject(""),
+            "/DA": default_appearance,
+        },
+    )
+    checkbox_ref = _field(
+        "Case a cocher 1",
+        [50, 650, 70, 670],
+        {
+            "/FT": NameObject("/Btn"),
+            "/V": NameObject("/Off"),
+            "/AS": NameObject("/Off"),
+            "/AP": DictionaryObject(
+                {
+                    NameObject("/N"): DictionaryObject(
+                        {
+                            NameObject("/Oui"): writer._add_object(DictionaryObject()),
+                            NameObject("/Off"): writer._add_object(DictionaryObject()),
+                        }
+                    )
+                }
+            ),
+        },
+    )
+
+    annots = ArrayObject([text_ref, checkbox_ref])
+    page[NameObject("/Annots")] = annots
+    writer._root_object[NameObject("/AcroForm")] = DictionaryObject(
+        {
+            NameObject("/Fields"): annots,
+            NameObject("/NeedAppearances"): BooleanObject(True),
+            NameObject("/DR"): default_resources,
+            NameObject("/DA"): default_appearance,
+        }
+    )
+    with open(path, "wb") as handle:
+        writer.write(handle)
 
 
 # ---------------------------------------------------------------------------
