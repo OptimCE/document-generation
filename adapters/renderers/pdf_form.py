@@ -12,9 +12,15 @@ Official forms name their fields automatically (``Champ de texte 68``,
 template, so it lives in the bundle.
 
 A value may also map to a **list** of field names, for the comb boxes these forms
-use to spell a code out one character per box (an 18-digit EAN across 16 boxes,
-say). The string is then spread left-aligned across them and any leftover box is
-cleared.
+use to spell a code out one character per box (the 16 digits of an EAN that
+follow a form's pre-printed "5 4", say). The string is then spread left-aligned
+across them and any leftover box is cleared.
+
+A value LONGER than the field list is truncated from the right, silently. So a
+manifest that maps a comb field must also declare its length in
+``required_fields``: the JSON Schema gate in the orchestrator runs first and
+turns an over-long value into a permanent VALIDATION_ERROR rather than a
+plausible-looking, wrong document.
 
 Checkbox fields are detected from the PDF's own ``/FT`` and export states — a
 truthy value selects the non-``/Off`` state, a falsy one selects ``/Off`` — so a
