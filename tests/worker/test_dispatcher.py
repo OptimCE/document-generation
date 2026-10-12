@@ -7,6 +7,7 @@ result; transient → nak until exhausted, then result + DLQ + ack.
 
 from __future__ import annotations
 
+from core.config import settings
 from domain.errors import RenderError, SchemaValidationError, StorageError
 from domain.models import GenerationStatus
 from tests.conftest import (
@@ -20,6 +21,7 @@ from tests.conftest import (
     SingleRendererRegistry,
     request_bytes,
 )
+from tests.fake_jetstream import FakeJetStream
 from worker import dispatcher
 from worker.dispatcher import HandlerDeps
 
@@ -194,3 +196,22 @@ async def test_unexpected_bug_treated_as_transient(jinja_bundle):
 
     assert msg.naked and not msg.acked
     assert transport.results == []
+
+
+async def test_subscribe_updates_the_settings_of_an_existing_durable(jinja_bundle):
+    """A durable an earlier build created takes the code's settings on subscribe."""
+    js = FakeJetStream({settings.DOCGEN_REQUEST_STREAM: [settings.DOCGEN_REQUEST_SUBJECT]})
+    js.seed(
+        settings.DOCGEN_REQUEST_SUBJECT,
+        settings.DOCGEN_DURABLE,
+        ack_wait=120.0,
+        max_ack_pending=15,
+    )
+
+    await dispatcher.subscribe(js, _deps(jinja_bundle), max_ack_pending=3)
+
+    config = js.stored(settings.DOCGEN_REQUEST_SUBJECT, settings.DOCGEN_DURABLE)
+    assert config.ack_wait == settings.DOCGEN_ACK_WAIT_SECONDS
+    assert config.max_deliver == settings.DOCGEN_MAX_DELIVER + 1
+    assert config.max_ack_pending == 3
+    assert js.subscriptions[0]["stream"] == settings.DOCGEN_REQUEST_STREAM

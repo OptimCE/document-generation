@@ -47,6 +47,7 @@ from pydantic import ValidationError
 from core import metrics as app_metrics
 from core.config import settings
 from core.context_vars import current_request_id
+from core.queue.helper import subscribe_durable
 from domain.errors import ErrorCode
 from domain.models import GenerationRequest, GenerationResult, GenerationStatus
 from domain.orchestrator import process_request
@@ -107,18 +108,17 @@ async def subscribe(
         # Server-side backstop, one above the handler's own DLQ bound: the
         # in-handler DLQ (at DOCGEN_MAX_DELIVER) is the primary path and fires
         # first, but if the handler somehow never acks, JetStream still stops
-        # redelivering. (nats-py reuses an existing durable's config, so changing
-        # this on a live durable requires recreating it, not just a restart.)
+        # redelivering. subscribe_durable writes it onto an existing durable,
+        # so a new value takes effect on the next worker restart.
         "max_deliver": settings.DOCGEN_MAX_DELIVER + 1,
     }
     if max_ack_pending is not None:
         config_kwargs["max_ack_pending"] = max_ack_pending
-    sub = await js.subscribe(
+    sub = await subscribe_durable(
+        js,
         subject=settings.DOCGEN_REQUEST_SUBJECT,
         stream=settings.DOCGEN_REQUEST_STREAM,
         durable=settings.DOCGEN_DURABLE,
-        queue=settings.DOCGEN_DURABLE,
-        manual_ack=True,
         cb=_make_handler(deps, inflight=inflight),
         config=ConsumerConfig(**config_kwargs),
     )
