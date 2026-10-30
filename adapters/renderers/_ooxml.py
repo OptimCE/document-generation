@@ -18,6 +18,8 @@ import zipfile
 
 # Fixed (not wall-clock) so normalised packages are reproducible.
 _FIXED_ZIP_DATE = (1980, 1, 1, 0, 0, 0)
+# ZipInfo.create_system for Unix, what the Linux container writes anyway.
+_UNIX = 3
 _FIXED_ISO = b"2000-01-01T00:00:00Z"
 _CREATED_RE = re.compile(rb"(<dcterms:created[^>]*>)[^<]*(</dcterms:created>)")
 _MODIFIED_RE = re.compile(rb"(<dcterms:modified[^>]*>)[^<]*(</dcterms:modified>)")
@@ -47,5 +49,9 @@ def normalise_ooxml_bytes(raw: bytes) -> bytes:
                 data = _MODIFIED_RE.sub(rb"\g<1>" + _FIXED_ISO + rb"\g<2>", data)
             info = zipfile.ZipInfo(name, date_time=_FIXED_ZIP_DATE)
             info.compress_type = zipfile.ZIP_DEFLATED
+            # ZipInfo defaults this to the HOST (0 on Windows, 3 elsewhere), so
+            # without it the same render hashes differently on a developer's
+            # machine and in the container.
+            info.create_system = _UNIX
             dst.writestr(info, data)
     return out.getvalue()

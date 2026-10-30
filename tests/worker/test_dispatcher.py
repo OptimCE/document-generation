@@ -7,6 +7,8 @@ result; transient → nak until exhausted, then result + DLQ + ack.
 
 from __future__ import annotations
 
+import dataclasses
+
 from core.config import settings
 from domain.errors import RenderError, SchemaValidationError, StorageError
 from domain.models import GenerationStatus
@@ -215,3 +217,15 @@ async def test_subscribe_updates_the_settings_of_an_existing_durable(jinja_bundl
     assert config.max_deliver == settings.DOCGEN_MAX_DELIVER + 1
     assert config.max_ack_pending == 3
     assert js.subscriptions[0]["stream"] == settings.DOCGEN_REQUEST_STREAM
+
+
+async def test_the_published_result_carries_the_renderer_identity(jinja_bundle):
+    transport = FakeTransport()
+    deps = dataclasses.replace(
+        _deps(jinja_bundle, transport=transport), renderer_identity={"pypdf": "5.1.0"}
+    )
+
+    await _handle(FakeMsg(request_bytes()), deps)
+
+    ((_subject, result),) = transport.results
+    assert result.renderer == {"pypdf": "5.1.0"}

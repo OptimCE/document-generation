@@ -110,9 +110,20 @@ of truth for both `error.permanent` and the ack/nak decision.
   Dockerfile.worker` then run pytest inside the image.
 - **Stateless:** the only state is the local-disk template cache
   (`TEMPLATE_CACHE_DIR`), keyed by the immutable versioned template URI. No DB.
-- **Pure render:** artifact bytes are a function of (template, data) — no `now()`/
-  random in a render. XLSX is repacked deterministically (openpyxl stamps `now()`
-  at save); `generated_at` lives on the result envelope only.
+- **Pure render:** artifact bytes are a function of (template, data, watermark) —
+  no `now()`/random in a render. XLSX/DOCX are repacked deterministically
+  (openpyxl stamps `now()` at save; `ZipInfo.create_system` is pinned to Unix, or
+  a Windows host hashes differently from the container); `generated_at` lives on
+  the result envelope only. The zip bytes still depend on the zlib build, which is
+  why the Dockerfile pins the Debian release and the result reports `renderer`
+  (`adapters/renderer_identity.py`). `tests/renderers/test_watermark.py` and the
+  per-engine tests assert byte equality.
+- **Watermarks are the renderer's, never the template's** (`adapters/renderers/
+  _watermark.py`): a template cannot forget one, and a regulator's file needs no
+  edit to carry one. Every renderer stamps it or raises, which is what lets the
+  orchestrator echo `watermark` on success. With none, the renderers do not touch
+  the document: an unstamped render is byte-identical to one from before the
+  feature (checked on the 11 CWaPE bundles on 30/10/2026).
 - **Least privilege:** reads `TEMPLATES_BUCKET`, writes `OUTPUT_BUCKET`, nothing
   else; the `template.uri` bucket must equal `TEMPLATES_BUCKET`.
 - **Tests are hand-written and hermetic** — NATS + storage fully faked; `FakeMsg`

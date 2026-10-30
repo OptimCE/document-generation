@@ -189,3 +189,49 @@ async def test_deterministic_output_key_and_bytes(jinja_bundle):
 )
 def test_build_object_key_normalises_slashes(prefix, filename, expected):
     assert build_object_key(prefix, filename) == expected
+
+
+async def test_watermark_reaches_the_renderer_and_is_echoed(jinja_bundle):
+    renderer = FakeRenderer()
+    deps = _deps(jinja_bundle, renderer=renderer)
+
+    result = await _run(make_request(options={"watermark": "BROUILLON"}), **deps)
+
+    assert renderer.watermarks == ["BROUILLON"]
+    # The echo is how a caller tells a stamped draft from an old worker that
+    # ignored the option and rendered it plain.
+    assert result.watermark == "BROUILLON"
+
+
+async def test_no_watermark_renders_plain_and_echoes_nothing(jinja_bundle):
+    renderer = FakeRenderer()
+    deps = _deps(jinja_bundle, renderer=renderer)
+
+    result = await _run(make_request(), **deps)
+
+    assert renderer.watermarks == [None]
+    assert result.watermark is None
+    assert b'"watermark"' not in result.to_json_bytes()
+
+
+async def test_failed_render_echoes_no_watermark(jinja_bundle):
+    deps = _deps(jinja_bundle, renderer=FakeRenderer(error=RenderError("boom")))
+
+    result = await _run(make_request(options={"watermark": "BROUILLON"}), **deps)
+
+    assert result.status is GenerationStatus.FAILED
+    assert result.watermark is None
+
+
+async def test_renderer_identity_is_echoed_on_success(jinja_bundle):
+    deps = _deps(jinja_bundle)
+
+    result = await process_request(
+        make_request(),
+        render_executor=InlineExecutor(),
+        generated_at=FIXED_GENERATED_AT,
+        renderer_identity={"pypdf": "5.1.0", "zlib": "1.3.1"},
+        **deps,
+    )
+
+    assert result.renderer == {"pypdf": "5.1.0", "zlib": "1.3.1"}

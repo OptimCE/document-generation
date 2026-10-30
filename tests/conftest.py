@@ -325,11 +325,19 @@ class FakeRenderer:
         self.content = content
         self.error = error
         self.calls: list[tuple[OutputFormat, dict, str | None]] = []
+        self.watermarks: list[str | None] = []
 
     def render(
-        self, bundle: TemplateBundle, data: Any, fmt: OutputFormat, *, locale: str | None
+        self,
+        bundle: TemplateBundle,
+        data: Any,
+        fmt: OutputFormat,
+        *,
+        locale: str | None,
+        watermark: str | None = None,
     ) -> RenderedArtifact:
         self.calls.append((fmt, dict(data), locale))
+        self.watermarks.append(watermark)
         if self.error is not None:
             raise self.error
         return RenderedArtifact(
@@ -390,11 +398,15 @@ class InlineExecutor:
         fmt: OutputFormat,
         *,
         locale: str | None,
+        watermark: str | None = None,
     ) -> RenderedArtifact:
         from domain.errors import RenderError
 
         try:
-            return cast(RenderedArtifact, renderer.render(bundle, data, fmt, locale=locale))
+            return cast(
+                RenderedArtifact,
+                renderer.render(bundle, data, fmt, locale=locale, watermark=watermark),
+            )
         except DocGenError:
             raise
         except Exception as exc:

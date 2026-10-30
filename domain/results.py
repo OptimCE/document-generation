@@ -7,6 +7,8 @@ the same opaque ``metadata`` echo.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
+
 from domain.errors import DocGenError
 from domain.models import (
     Artifact,
@@ -23,6 +25,8 @@ def success_result(
     *,
     template_version: str,
     generated_at: str,
+    watermark: str | None = None,
+    renderer: Mapping[str, str] | None = None,
 ) -> GenerationResult:
     return GenerationResult(
         request_id=request.request_id,
@@ -30,6 +34,8 @@ def success_result(
         artifacts=artifacts,
         error=None,
         template_version=template_version,
+        watermark=watermark,
+        renderer=dict(renderer) if renderer is not None else None,
         generated_at=generated_at,
         metadata=request.metadata,
     )

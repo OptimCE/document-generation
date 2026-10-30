@@ -28,6 +28,7 @@ from concurrent.futures.process import BrokenProcessPool
 from adapters.nats_transport import NatsTransport
 from adapters.object_store import ObjectStorageObjectStore
 from adapters.render_executor import ProcessPoolRenderExecutor
+from adapters.renderer_identity import renderer_identity
 from adapters.renderers.registry import DefaultRendererRegistry
 from adapters.template_store import ObjectStorageTemplateStore
 from adapters.validator_jsonschema import JsonSchemaValidator
@@ -207,6 +208,7 @@ def _build_deps(js, render_executor: ProcessPoolRenderExecutor) -> HandlerDeps:
         render_executor=render_executor,
         object_store=ObjectStorageObjectStore(bucket=settings.OUTPUT_BUCKET),
         transport=NatsTransport(js, dlq_subject=settings.DOCGEN_DLQ_SUBJECT),
+        renderer_identity=renderer_identity(),
     )
 
 

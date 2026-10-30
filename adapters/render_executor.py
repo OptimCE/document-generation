@@ -29,9 +29,10 @@ def _invoke(
     data: dict[str, Any],
     fmt: OutputFormat,
     locale: str | None,
+    watermark: str | None,
 ) -> RenderedArtifact:
     """Top-level, picklable entry executed inside a pool process."""
-    return renderer.render(bundle, data, fmt, locale=locale)
+    return renderer.render(bundle, data, fmt, locale=locale, watermark=watermark)
 
 
 class InlineRenderExecutor:
@@ -43,9 +44,10 @@ class InlineRenderExecutor:
         fmt: OutputFormat,
         *,
         locale: str | None,
+        watermark: str | None = None,
     ) -> RenderedArtifact:
         try:
-            return renderer.render(bundle, data, fmt, locale=locale)
+            return renderer.render(bundle, data, fmt, locale=locale, watermark=watermark)
         except DocGenError:
             raise
         except Exception as exc:
@@ -65,16 +67,17 @@ class ProcessPoolRenderExecutor:
         fmt: OutputFormat,
         *,
         locale: str | None,
+        watermark: str | None = None,
     ) -> RenderedArtifact:
         loop = asyncio.get_running_loop()
         try:
             if self._semaphore is None:
                 return await loop.run_in_executor(
-                    self._executor, _invoke, renderer, bundle, dict(data), fmt, locale
+                    self._executor, _invoke, renderer, bundle, dict(data), fmt, locale, watermark
                 )
             async with self._semaphore:
                 return await loop.run_in_executor(
-                    self._executor, _invoke, renderer, bundle, dict(data), fmt, locale
+                    self._executor, _invoke, renderer, bundle, dict(data), fmt, locale, watermark
                 )
         except DocGenError:
             raise

@@ -103,6 +103,12 @@ class RequestOptions(BaseModel):
     model_config = ConfigDict(extra="ignore")
     locale: str | None = None
     presign_ttl: int | None = Field(default=None, ge=1)
+    # A text stamped across every page or sheet, marking a working draft (the
+    # caller's word for it: "BROUILLON"). ``None`` renders the document as is.
+    # Ignoring unknown keys cuts both ways here: an older worker would render a
+    # draft without it, silently. That is why the result echoes what was applied
+    # (``GenerationResult.watermark``): a caller that asked for one checks it.
+    watermark: str | None = Field(default=None, min_length=1, max_length=40)
 
 
 class GenerationRequest(BaseModel):
@@ -157,6 +163,14 @@ class GenerationResult(BaseModel):
     artifacts: list[Artifact] = Field(default_factory=list)
     error: ResultError | None = None
     template_version: str | None = None
+    # The watermark actually stamped on the artifacts (success only); absent
+    # when none was requested.
+    watermark: str | None = None
+    # What produced the bytes: Python, zlib and the rendering libraries'
+    # versions (``adapters.renderer_identity``). With the template version and
+    # the data, it lets a caller tell "this render is not reproducible" from
+    # "the renderer was upgraded since".
+    renderer: dict[str, str] | None = None
     generated_at: str
     metadata: dict[str, Any] = Field(default_factory=dict)
 

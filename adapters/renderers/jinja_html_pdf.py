@@ -22,6 +22,7 @@ from typing import Any, cast
 from jinja2 import Environment, FileSystemLoader, StrictUndefined, select_autoescape
 
 from adapters.renderers._paths import resolve_template_file
+from adapters.renderers._watermark import stamp_html
 from domain.errors import DocGenError, RenderError
 from domain.models import OutputFormat, RenderedArtifact
 from domain.ports import TemplateBundle
@@ -37,9 +38,12 @@ class JinjaHtmlRenderer:
         fmt: OutputFormat,
         *,
         locale: str | None,
+        watermark: str | None = None,
     ) -> RenderedArtifact:
         try:
             html = self._render_html(bundle, dict(data), locale)
+            if watermark is not None:
+                html = stamp_html(html, watermark)
             if fmt is OutputFormat.HTML:
                 content = html.encode("utf-8")
             elif fmt is OutputFormat.PDF:

@@ -71,7 +71,7 @@ is opaque and echoed back untouched; `request_id` is the correlation key.
   "data": { },
   "key_prefix": "billing/invoices/2026/06/inv-00042/",
   "reply_to": "docgen.result.billing",
-  "options": { "locale": "fr-BE", "presign_ttl": 3600 },
+  "options": { "locale": "fr-BE", "presign_ttl": 3600, "watermark": "BROUILLON" },
   "metadata": { "invoice_id": "..." }
 }
 ```
@@ -83,9 +83,24 @@ is opaque and echoed back untouched; `request_id` is the correlation key.
   "request_id": "uuid", "status": "success",
   "artifacts": [{ "format": "pdf", "uri": "s3://optimce-documents/.../invoice.pdf",
                   "presigned_url": "https://...", "size_bytes": 84213, "sha256": "..." }],
-  "template_version": "3", "generated_at": "ISO-8601", "metadata": { "invoice_id": "..." }
+  "template_version": "3", "watermark": "BROUILLON",
+  "renderer": { "python": "3.12.13", "zlib": "1.3.1", "pypdf": "5.1.0", "...": "..." },
+  "generated_at": "ISO-8601", "metadata": { "invoice_id": "..." }
 }
 ```
+
+`options.watermark` (optional, 1 to 40 characters) stamps a draft: a diagonal text
+over every PDF page, Word's own text watermark in every .docx header, the print
+header and footer of every .xlsx sheet (Excel has no on-screen watermark short
+of editing the cells, and regulator workbooks are imposed formats), a fixed
+element in HTML. Without it the output is exactly the unstamped document. The
+result echoes the watermark it applied, so a caller can refuse a draft that an
+older worker, which ignores unknown options, rendered plain.
+
+`renderer` names what produced the bytes (Python, zlib, the rendering libraries).
+A render is a pure function of (template, data, watermark) for a given renderer;
+a caller that keeps an artifact's sha256 as evidence and regenerates it later
+needs this to tell a lost guarantee from an upgraded library.
 
 A failed result carries `error: { code, message, permanent }` instead of
 artifacts. `error.permanent` tells the caller whether a retry could ever succeed.

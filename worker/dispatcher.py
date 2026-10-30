@@ -36,7 +36,7 @@ import contextlib
 import dataclasses
 import logging
 import time
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Mapping
 from datetime import UTC, datetime
 
 from nats.aio.msg import Msg
@@ -84,6 +84,8 @@ class HandlerDeps:
     max_deliver: int = settings.DOCGEN_MAX_DELIVER
     nak_delay: int = settings.DOCGEN_NAK_RETRY_DELAY_SECONDS
     clock: Clock = _utc_now
+    # Echoed on every success; see adapters.renderer_identity.
+    renderer_identity: Mapping[str, str] | None = None
 
 
 async def subscribe(
@@ -213,6 +215,7 @@ async def _build_result(request: GenerationRequest, deps: HandlerDeps) -> Genera
             render_executor=deps.render_executor,
             object_store=deps.object_store,
             generated_at=deps.clock().isoformat(),
+            renderer_identity=deps.renderer_identity,
         )
     except Exception:
         logger.exception("Unhandled error processing request %s", request.request_id)

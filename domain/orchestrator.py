@@ -19,6 +19,8 @@ artifact's bytes, so it does not compromise render determinism.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
+
 from domain.errors import DocGenError, UnsupportedFormatError
 from domain.models import Artifact, GenerationRequest, GenerationResult, RenderedArtifact
 from domain.ports import (
@@ -51,6 +53,7 @@ async def process_request(
     render_executor: RenderExecutor,
     object_store: ObjectStore,
     generated_at: str,
+    renderer_identity: Mapping[str, str] | None = None,
 ) -> GenerationResult:
     template_version: str | None = None
     try:
@@ -90,6 +93,7 @@ async def process_request(
                 request.data,
                 fmt,
                 locale=request.options.locale,
+                watermark=request.options.watermark,
             )
             rendered.append(art)
 
@@ -120,6 +124,10 @@ async def process_request(
             artifacts,
             template_version=template_version,
             generated_at=generated_at,
+            # Every renderer stamps the watermark or raises, so reaching here
+            # means it was applied to each artifact.
+            watermark=request.options.watermark,
+            renderer=renderer_identity,
         )
 
     except DocGenError as exc:
