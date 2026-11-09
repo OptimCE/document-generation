@@ -48,6 +48,7 @@ from collections.abc import Mapping
 from typing import Any
 
 from adapters.renderers._paths import resolve_template_file
+from adapters.renderers._watermark import stamp_pdf_writer
 from domain.errors import DocGenError, RenderError, TemplateNotFoundError
 from domain.models import OutputFormat, RenderedArtifact
 from domain.ports import TemplateBundle
@@ -68,11 +69,12 @@ class PdfFormRenderer:
         fmt: OutputFormat,
         *,
         locale: str | None,
+        watermark: str | None = None,
     ) -> RenderedArtifact:
         if fmt is not OutputFormat.PDF:
             raise RenderError(f"pdf-form engine cannot produce {fmt.value!r}")
         try:
-            content = self._render(bundle, dict(data))
+            content = self._render(bundle, dict(data), watermark)
         except DocGenError:
             raise
         except Exception as exc:  # any pypdf failure → transient render error
@@ -85,7 +87,9 @@ class PdfFormRenderer:
         )
 
     @classmethod
-    def _render(cls, bundle: TemplateBundle, data: dict[str, Any]) -> bytes:
+    def _render(
+        cls, bundle: TemplateBundle, data: dict[str, Any], watermark: str | None = None
+    ) -> bytes:
         # Lazy import: keeps the process-pool import cost and the test import
         # graph unchanged, matching the jinja-html renderer's convention.
         from pypdf import PdfReader, PdfWriter
@@ -109,6 +113,8 @@ class PdfFormRenderer:
         if values:
             for page in writer.pages:
                 writer.update_page_form_field_values(page, values)
+        if watermark is not None:
+            stamp_pdf_writer(writer, watermark)
 
         cls._pin_document_id(writer, manifest.id, manifest.version)
         buffer = io.BytesIO()

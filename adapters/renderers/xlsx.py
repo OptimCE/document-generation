@@ -36,6 +36,7 @@ from openpyxl.utils import coordinate_to_tuple
 
 from adapters.renderers._ooxml import normalise_ooxml_bytes
 from adapters.renderers._paths import resolve_template_file
+from adapters.renderers._watermark import stamp_workbook
 from domain.errors import DocGenError, RenderError, SchemaValidationError
 from domain.models import BlockSpec, Manifest, OutputFormat, RenderedArtifact
 from domain.ports import TemplateBundle
@@ -56,11 +57,12 @@ class XlsxRenderer:
         fmt: OutputFormat,
         *,
         locale: str | None,
+        watermark: str | None = None,
     ) -> RenderedArtifact:
         if fmt is not OutputFormat.XLSX:
             raise RenderError(f"xlsx engine cannot produce {fmt.value!r}")
         try:
-            content = self._render(bundle, dict(data))
+            content = self._render(bundle, dict(data), watermark)
         except DocGenError:
             raise
         except Exception as exc:  # any openpyxl failure → transient render error
@@ -73,7 +75,9 @@ class XlsxRenderer:
         )
 
     @classmethod
-    def _render(cls, bundle: TemplateBundle, data: dict[str, Any]) -> bytes:
+    def _render(
+        cls, bundle: TemplateBundle, data: dict[str, Any], watermark: str | None = None
+    ) -> bytes:
         manifest = bundle.manifest
         entry = resolve_template_file(bundle.root, manifest.resolve_entrypoint())
         workbook = load_workbook(entry)
@@ -82,6 +86,8 @@ class XlsxRenderer:
         cls._apply_defined_names(workbook, data, skip={b.source for b in manifest.blocks})
         cls._apply_blocks(workbook, manifest, data)
         cls._apply_cells(workbook, data.get("cells", {}))
+        if watermark is not None:
+            stamp_workbook(workbook, watermark)
         cls._normalise_properties(workbook)
         buffer = io.BytesIO()
         workbook.save(buffer)

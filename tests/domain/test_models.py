@@ -13,6 +13,7 @@ from domain.models import (
     GenerationStatus,
     Manifest,
     OutputFormat,
+    RequestOptions,
     ResultError,
 )
 from tests.conftest import make_request
@@ -99,3 +100,11 @@ def test_output_format_content_types():
     assert OutputFormat.PDF.content_type == "application/pdf"
     assert OutputFormat.HTML.content_type == "text/html; charset=utf-8"
     assert "spreadsheetml" in OutputFormat.XLSX.content_type
+
+
+def test_watermark_option_is_bounded():
+    with pytest.raises(ValidationError):
+        RequestOptions(watermark="")
+    with pytest.raises(ValidationError):
+        RequestOptions(watermark="X" * 41)
+    assert RequestOptions(watermark="BROUILLON").watermark == "BROUILLON"

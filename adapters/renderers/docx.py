@@ -27,6 +27,7 @@ from typing import Any
 
 from adapters.renderers._ooxml import normalise_ooxml_bytes
 from adapters.renderers._paths import resolve_template_file
+from adapters.renderers._watermark import stamp_docx
 from domain.errors import DocGenError, RenderError
 from domain.models import OutputFormat, RenderedArtifact
 from domain.ports import TemplateBundle
@@ -45,11 +46,12 @@ class DocxRenderer:
         fmt: OutputFormat,
         *,
         locale: str | None,
+        watermark: str | None = None,
     ) -> RenderedArtifact:
         if fmt is not OutputFormat.DOCX:
             raise RenderError(f"docx engine cannot produce {fmt.value!r}")
         try:
-            content = self._render(bundle, dict(data), locale)
+            content = self._render(bundle, dict(data), locale, watermark)
         except DocGenError:
             raise
         except Exception as exc:  # any docxtpl/python-docx failure → transient
@@ -62,7 +64,13 @@ class DocxRenderer:
         )
 
     @classmethod
-    def _render(cls, bundle: TemplateBundle, data: dict[str, Any], locale: str | None) -> bytes:
+    def _render(
+        cls,
+        bundle: TemplateBundle,
+        data: dict[str, Any],
+        locale: str | None,
+        watermark: str | None = None,
+    ) -> bytes:
         # Lazy import, and the Jinja Environment is built here rather than held
         # on the instance: an Environment is not reliably picklable and this
         # renderer crosses the process-pool boundary.
@@ -85,6 +93,10 @@ class DocxRenderer:
             finalize=lambda value: "" if value is None else value,
         )
         template.render({"data": data, "locale": locale}, environment)
+        if watermark is not None:
+            # After the render, so a header the template itself templates is
+            # stamped as rendered, not as Jinja source.
+            stamp_docx(template.docx, watermark)
         cls._normalise_properties(template.docx)
 
         buffer = io.BytesIO()

@@ -67,11 +67,14 @@ class Renderer(Protocol):
         fmt: OutputFormat,
         *,
         locale: str | None,
+        watermark: str | None = None,
     ) -> RenderedArtifact:
         """Render ``data`` into one artifact. Synchronous and CPU-bound — runs
         inside a process pool via ``RenderExecutor``.
 
-        Must be a pure function of (template, data): no wall-clock, no randomness.
+        Must be a pure function of (template, data, watermark): no wall-clock,
+        no randomness. A ``watermark`` is stamped on every page or sheet; with
+        ``None`` the output is exactly the unstamped document.
         Raises ``domain.errors.RenderError`` on failure.
         """
         ...
@@ -95,6 +98,7 @@ class RenderExecutor(Protocol):
         fmt: OutputFormat,
         *,
         locale: str | None,
+        watermark: str | None = None,
     ) -> RenderedArtifact:
         """Execute ``renderer.render(...)``, keeping CPU work off the event loop.
 
