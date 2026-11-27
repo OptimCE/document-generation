@@ -16,8 +16,8 @@ Dokumentgenerierungs-Worker für OptimCE.
 
 Er konsumiert eine Generierungsanfrage über JetStream, holt ein Template +
 Manifest aus dem Objektspeicher, validiert die übergebenen `data` gegen das
-JSON-Schema des Manifests, rendert nach **PDF, HTML und/oder XLSX**, schreibt die
-Artefakte in einen einzigen Ausgabe-Bucket und veröffentlicht ein Ergebnis.
+JSON-Schema des Manifests, rendert nach **PDF, HTML, DOCX und/oder XLSX**, schreibt
+die Artefakte in einen einzigen Ausgabe-Bucket und veröffentlicht ein Ergebnis.
 
 Der Worker enthält **kein Fachwissen** — nichts über Rechnungen, Mitglieder oder
 die CWaPE. Alle fachlichen Besonderheiten leben in den Templates und ihren
@@ -50,7 +50,8 @@ adapters/      # concrete implementations of the ports
   validator_jsonschema.py  Draft 2020-12 validation gate
   nats_transport.py        publish results / DLQ
   render_executor.py       inline + process-pool execution
-  renderers/               jinja-html→PDF (WeasyPrint), xlsx (openpyxl), registry
+  renderers/               jinja-html→PDF (WeasyPrint), xlsx (openpyxl),
+                           docx (docxtpl), pdf-form (pypdf), registry, _ooxml
 core/          # reused infra (settings, logging, tracing, metrics, queue, storage client)
 worker/        # main.py entrypoint + dispatcher (subscription, ack/nak/DLQ)
 ```
@@ -75,7 +76,7 @@ Korrelationsschlüssel.
   "data": { },
   "key_prefix": "billing/invoices/2026/06/inv-00042/",
   "reply_to": "docgen.result.billing",
-  "options": { "locale": "fr-BE", "presign_ttl": 3600 },
+  "options": { "locale": "fr-BE", "presign_ttl": 3600, "watermark": "BROUILLON" },
   "metadata": { "invoice_id": "..." }
 }
 ```
@@ -87,9 +88,27 @@ Korrelationsschlüssel.
   "request_id": "uuid", "status": "success",
   "artifacts": [{ "format": "pdf", "uri": "s3://optimce-documents/.../invoice.pdf",
                   "presigned_url": "https://...", "size_bytes": 84213, "sha256": "..." }],
-  "template_version": "3", "generated_at": "ISO-8601", "metadata": { "invoice_id": "..." }
+  "template_version": "3", "watermark": "BROUILLON",
+  "renderer": { "python": "3.12.13", "zlib": "1.3.1", "pypdf": "5.1.0", "...": "..." },
+  "generated_at": "ISO-8601", "metadata": { "invoice_id": "..." }
 }
 ```
+
+`options.watermark` (optional, 1 bis 40 Zeichen) kennzeichnet einen Entwurf: ein
+diagonaler Text auf jeder PDF-Seite, das Textwasserzeichen von Word in jeder
+.docx-Kopfzeile, Kopf- und Fußzeile des Drucks auf jedem .xlsx-Blatt (Excel kennt ohne
+Änderung der Zellen kein Wasserzeichen am Bildschirm, und die Arbeitsmappen der
+Regulierungsbehörden sind vorgeschriebene Formate), ein festes Element in HTML. Ohne
+diese Option ist die Ausgabe genau das ungekennzeichnete Dokument. Das Ergebnis gibt
+das angewendete Wasserzeichen zurück; so kann ein Aufrufer einen Entwurf ablehnen, den
+ein älterer Worker, der unbekannte Optionen ignoriert, ohne Kennzeichnung gerendert
+hat.
+
+`renderer` nennt, was die Bytes erzeugt hat (Python, zlib, die Render-Bibliotheken).
+Ein Rendering ist für einen gegebenen Renderer eine reine Funktion von (Template, data,
+Wasserzeichen); ein Aufrufer, der den sha256 eines Artefakts als Nachweis aufbewahrt
+und es später neu erzeugt, braucht diese Angabe, um eine verlorene Garantie von einer
+aktualisierten Bibliothek zu unterscheiden.
 
 Ein fehlgeschlagenes Ergebnis trägt `error: { code, message, permanent }`
 anstelle der Artefakte. `error.permanent` sagt dem Aufrufer, ob ein erneuter
@@ -112,14 +131,23 @@ Fehlercodes: `VALIDATION_ERROR`, `TEMPLATE_NOT_FOUND`, `UNSUPPORTED_FORMAT`
 }
 ```
 
-- `engine` — `jinja-html` (PDF/HTML über Jinja2 + WeasyPrint) oder `xlsx`
-  (openpyxl).
+- `engine` — eine von:
+
+  | Engine | erzeugt | Bibliothek | Verwendung |
+  |---|---|---|---|
+  | `jinja-html` | `pdf`, `html` | Jinja2 + WeasyPrint | Dokumente, die wir selbst verfassen |
+  | `xlsx` | `xlsx` | openpyxl | Tabellenformulare |
+  | `docx` | `docx` | docxtpl | Dokumente, deren vorgeschriebenes Format Word ist |
+  | `pdf-form` | `pdf` | pypdf | das ausfüllbare PDF einer Behörde ausfüllen |
+
 - `entrypoint` *(optional)* — Einstiegsdatei; Standard `template.html` /
-  `template.xlsx`.
+  `template.xlsx` / `template.docx` / `template.pdf`.
 - `output_basename` *(optional)* — Basisname des Artefakts; Standard ist das
   letzte durch Punkt getrennte Segment von `id` (`billing.invoice` →
   `invoice.pdf`).
 - `required_fields` — JSON-Schema; ein leeres Schema validiert alles.
+- `blocks` *(nur xlsx)* — wiederholte Bereiche, siehe unten.
+- `fields` *(nur pdf-form)* — data-Schlüssel → Name des AcroForm-Felds.
 
 **jinja-html-Templates** erhalten die `data` der Anfrage als `data` und die
 Locale als `locale` (z. B. `{{ data.invoice_number }}`). Relative Ressourcen
@@ -127,10 +155,40 @@ Locale als `locale` (z. B. `{{ data.invoice_number }}`). Relative Ressourcen
 Template-Verzeichnis aufgelöst. Ein fehlendes Feld ist ein harter Fehler (keine
 stillen Leerstellen). Siehe `tests/fixtures/templates/billing_invoice/`.
 
-**xlsx-Templates** werden auf zwei Wegen aus `data` befüllt: über die **defined
-names** der Arbeitsmappe, die zu den Top-Level-Schlüsseln von `data` passen, und
-über eine explizite `data.cells`-Zuordnung `"A1"` / `"Sheet!A1"` → Wert (zuletzt
-angewendet).
+**docx-Templates** funktionieren genauso — `{{ data.x }}`, in Word geschrieben.
+
+**xlsx-Templates** werden auf drei Wegen aus `data` befüllt: über die **defined
+names** der Arbeitsmappe, die zu den Top-Level-Schlüsseln von `data` passen, über
+**wiederholte Blöcke** und über eine explizite `data.cells`-Zuordnung `"A1"` /
+`"Sheet!A1"` → Wert (zuletzt angewendet).
+
+Ein Block macht aus einer Liste variabler Länge Zeilen eines Arbeitsblatts. Die
+Anordnung legt das *Manifest* fest, nie der Aufrufer — die Ankerzelle ist eine
+Eigenschaft der Arbeitsmappe:
+
+```json
+"blocks": [{
+  "source": "participants",
+  "anchor": "Membres et actionnaires!A4",
+  "columns": ["categorie", "nom", "rue", "code_postal"],
+  "hide_unused_rows": true
+}]
+```
+
+`data.participants` ist dann eine Liste von Dictionaries, und Zeile *i*, Spalte *j* ist
+`rows[i][columns[j]]`. Die Zeilen werden **an Ort und Stelle** in einen Bereich
+geschrieben, den das Template bereits vorsieht — nie eingefügt, denn openpyxl korrigiert
+weder Formeln noch verbundene Bereiche, defined names, Datenüberprüfungen oder
+Druckbereiche, wenn sich Zeilen verschieben. Die Kapazität stammt aus
+`required_fields.properties.<source>.maxItems` (oder einem expliziten `max_rows`); wird
+sie überschritten, ist das ein **permanenter** `VALIDATION_ERROR`, ausgelöst vor jedem
+Rendering. Ungenutzte Zeilen werden ausgeblendet, nicht gelöscht.
+
+**pdf-form-Templates** sind das ausfüllbare PDF der Behörde selbst; nur die Feldwerte
+ändern sich. Amtliche Formulare benennen ihre Felder automatisch, deshalb ordnet das
+Manifest sie zu: `"fields": {"community_name": "Champ de texte 68"}`. Die Exportwerte
+der Kontrollkästchen werden aus dem PDF selbst gelesen, daher funktionieren `/Oui`,
+`/Yes` und `/1` alle ohne Konfiguration.
 
 ## Zuverlässigkeit (JetStream)
 
