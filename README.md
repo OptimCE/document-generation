@@ -15,8 +15,8 @@ A generic, **stateless**, **NATS-only** document-generation worker for OptimCE.
 
 It consumes a generation request over JetStream, fetches a template + manifest
 from object storage, validates the supplied `data` against the manifest's JSON
-Schema, renders to **PDF, HTML and/or XLSX**, writes the artifacts to a single output
-bucket, and publishes a result.
+Schema, renders to **PDF, HTML, DOCX and/or XLSX**, writes the artifacts to a single
+output bucket, and publishes a result.
 
 The worker contains **no domain knowledge** — nothing about invoices, members or
 CWaPE. All domain specifics live in templates and their manifests. It is a pure

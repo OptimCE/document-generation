@@ -16,8 +16,8 @@ documentgeneratie-worker voor OptimCE.
 
 Hij consumeert een generatieverzoek via JetStream, haalt een template + manifest
 op uit de objectopslag, valideert de aangeleverde `data` tegen het JSON-schema
-van het manifest, rendert naar **PDF, HTML en/of XLSX**, schrijft de artefacten
-naar één enkele output-bucket en publiceert een resultaat.
+van het manifest, rendert naar **PDF, HTML, DOCX en/of XLSX**, schrijft de
+artefacten naar één enkele output-bucket en publiceert een resultaat.
 
 De worker bevat **geen domeinkennis** — niets over facturen, leden of de CWaPE.
 Alle domeinspecifieke zaken leven in de templates en hun manifesten. Het is een
@@ -50,7 +50,8 @@ adapters/      # concrete implementations of the ports
   validator_jsonschema.py  Draft 2020-12 validation gate
   nats_transport.py        publish results / DLQ
   render_executor.py       inline + process-pool execution
-  renderers/               jinja-html→PDF (WeasyPrint), xlsx (openpyxl), registry
+  renderers/               jinja-html→PDF (WeasyPrint), xlsx (openpyxl),
+                           docx (docxtpl), pdf-form (pypdf), registry, _ooxml
 core/          # reused infra (settings, logging, tracing, metrics, queue, storage client)
 worker/        # main.py entrypoint + dispatcher (subscription, ack/nak/DLQ)
 ```
@@ -74,7 +75,7 @@ snake_case. `metadata` is ondoorzichtig en wordt ongewijzigd teruggegeven;
   "data": { },
   "key_prefix": "billing/invoices/2026/06/inv-00042/",
   "reply_to": "docgen.result.billing",
-  "options": { "locale": "fr-BE", "presign_ttl": 3600 },
+  "options": { "locale": "fr-BE", "presign_ttl": 3600, "watermark": "BROUILLON" },
   "metadata": { "invoice_id": "..." }
 }
 ```
@@ -86,9 +87,26 @@ snake_case. `metadata` is ondoorzichtig en wordt ongewijzigd teruggegeven;
   "request_id": "uuid", "status": "success",
   "artifacts": [{ "format": "pdf", "uri": "s3://optimce-documents/.../invoice.pdf",
                   "presigned_url": "https://...", "size_bytes": 84213, "sha256": "..." }],
-  "template_version": "3", "generated_at": "ISO-8601", "metadata": { "invoice_id": "..." }
+  "template_version": "3", "watermark": "BROUILLON",
+  "renderer": { "python": "3.12.13", "zlib": "1.3.1", "pypdf": "5.1.0", "...": "..." },
+  "generated_at": "ISO-8601", "metadata": { "invoice_id": "..." }
 }
 ```
+
+`options.watermark` (optioneel, 1 tot 40 tekens) markeert een concept: een diagonale
+tekst op elke pdf-pagina, het tekstwatermerk van Word in elke .docx-koptekst, de kop-
+en voettekst bij het afdrukken van elk .xlsx-blad (Excel heeft geen watermerk op het
+scherm zonder de cellen te wijzigen, en de werkmappen van regulatoren zijn opgelegde
+formaten), een vast element in HTML. Zonder deze optie is de uitvoer exact het
+ongemarkeerde document. Het resultaat geeft het toegepaste watermerk terug, zodat een
+aanroeper een concept kan weigeren dat een oudere worker, die onbekende opties negeert,
+zonder markering heeft weergegeven.
+
+`renderer` noemt wat de bytes heeft geproduceerd (Python, zlib, de
+renderbibliotheken). Een rendering is voor een gegeven renderer een pure functie van
+(template, data, watermerk); een aanroeper die de sha256 van een artefact als bewijs
+bewaart en het later opnieuw genereert, heeft dit nodig om een verloren garantie te
+onderscheiden van een bijgewerkte bibliotheek.
 
 Een mislukt resultaat draagt `error: { code, message, permanent }` in plaats van
 artefacten. `error.permanent` vertelt de aanroeper of een nieuwe poging ooit kan
@@ -111,14 +129,23 @@ Foutcodes: `VALIDATION_ERROR`, `TEMPLATE_NOT_FOUND`, `UNSUPPORTED_FORMAT`
 }
 ```
 
-- `engine` — `jinja-html` (PDF/HTML via Jinja2 + WeasyPrint) of `xlsx`
-  (openpyxl).
+- `engine` — een van:
+
+  | engine | produceert | bibliotheek | gebruik |
+  |---|---|---|---|
+  | `jinja-html` | `pdf`, `html` | Jinja2 + WeasyPrint | documenten die we zelf opstellen |
+  | `xlsx` | `xlsx` | openpyxl | spreadsheetformulieren |
+  | `docx` | `docx` | docxtpl | documenten waarvan Word het opgelegde formaat is |
+  | `pdf-form` | `pdf` | pypdf | de invulbare pdf van een overheid invullen |
+
 - `entrypoint` *(optioneel)* — invoerbestand; standaard `template.html` /
-  `template.xlsx`.
+  `template.xlsx` / `template.docx` / `template.pdf`.
 - `output_basename` *(optioneel)* — basisnaam van het artefact; standaard het
   laatste met een punt gescheiden segment van `id` (`billing.invoice` →
   `invoice.pdf`).
 - `required_fields` — JSON-schema; een leeg schema valideert alles.
+- `blocks` *(alleen xlsx)* — herhaalde zones, zie hieronder.
+- `fields` *(alleen pdf-form)* — sleutel van data → naam van het AcroForm-veld.
 
 **jinja-html-templates** ontvangen de `data` van het verzoek als `data` en de
 locale als `locale` (bijv. `{{ data.invoice_number }}`). Relatieve bronnen
@@ -126,10 +153,40 @@ locale als `locale` (bijv. `{{ data.invoice_number }}`). Relatieve bronnen
 template-map. Een ontbrekend veld is een harde fout (geen stille lege waarden).
 Zie `tests/fixtures/templates/billing_invoice/`.
 
-**xlsx-templates** worden op twee manieren uit `data` gevuld: via de **defined
-names** van de werkmap die overeenkomen met de top-level sleutels van `data`, en
-via een expliciete `data.cells`-map `"A1"` / `"Sheet!A1"` → waarde (als laatste
-toegepast).
+**docx-templates** werken op dezelfde manier — `{{ data.x }}`, geschreven in Word.
+
+**xlsx-templates** worden op drie manieren uit `data` gevuld: via de **defined
+names** van de werkmap die overeenkomen met de top-level sleutels van `data`, via
+**herhaalde blokken**, en via een expliciete `data.cells`-map `"A1"` /
+`"Sheet!A1"` → waarde (als laatste toegepast).
+
+Een blok zet een lijst van variabele lengte om in rijen van een werkblad. De indeling
+wordt vastgelegd door het *manifest*, nooit door de aanroeper — de ankercel is een
+eigenschap van de werkmap:
+
+```json
+"blocks": [{
+  "source": "participants",
+  "anchor": "Membres et actionnaires!A4",
+  "columns": ["categorie", "nom", "rue", "code_postal"],
+  "hide_unused_rows": true
+}]
+```
+
+`data.participants` is dan een lijst van dictionaries, en rij *i* kolom *j* is
+`rows[i][columns[j]]`. De rijen worden **ter plaatse** geschreven in een strook die het
+template al voorziet — nooit ingevoegd, omdat openpyxl formules, samengevoegde bereiken,
+defined names, gegevensvalidaties en afdrukbereiken niet aanpast wanneer rijen
+verschuiven. De capaciteit komt uit `required_fields.properties.<source>.maxItems` (of
+een expliciete `max_rows`), en ze overschrijden is een **permanente**
+`VALIDATION_ERROR`, opgeworpen vóór elke rendering. Ongebruikte rijen worden verborgen,
+niet verwijderd.
+
+**pdf-form-templates** zijn de invulbare pdf van de overheid zelf; alleen de
+veldwaarden veranderen. Officiële formulieren benoemen hun velden automatisch, dus
+koppelt het manifest ze: `"fields": {"community_name": "Champ de texte 68"}`. De
+exportwaarden van selectievakjes worden uit de pdf zelf gelezen, zodat `/Oui`, `/Yes`
+en `/1` allemaal werken zonder configuratie.
 
 ## Betrouwbaarheid (JetStream)
 
